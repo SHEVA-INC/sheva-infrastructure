@@ -18,7 +18,7 @@ locals {
   ecr_images = {
     api = {
       repository_name = "sheva-api"
-      image_tag       = "fa9a7da6689b282cd5bb5c253962564207d73809"
+      image_tag       = "f1242dd7caaa232d85ec930324d11329036fc61f"
     }
     ui = {
       repository_name = "sheva-ui"
