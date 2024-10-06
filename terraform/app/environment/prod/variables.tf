@@ -128,6 +128,20 @@ variable "ecs_container_port" {
   }
 }
 
+variable "ecr_images" {
+  description = "ECR images for the ECS containers"
+  type        = map(map(string))
+  default = {
+    api = {
+      repository_name = "sheva-api"
+      image_tag       = "latest"
+    }
+    ui = {
+      repository_name = "sheva-ui"
+      image_tag       = "latest"
+    }
+  }
+}
 ### Route53 Variables ###
 variable "domain_name" {
   description = "Domain name for the application"
