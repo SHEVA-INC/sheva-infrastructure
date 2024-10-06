@@ -1,0 +1,88 @@
+name: CD
+
+on:
+  repository_dispatch:
+    types: [deploy-ui, deploy-api]
+  workflow_dispatch:
+    inputs:
+      ui_image_tag:
+        description: 'The UI ECR image tag to deploy'
+        required: false
+      api_image_tag:
+        description: 'The API ECR image tag to deploy'
+        required: false
+
+jobs:
+  prepare-deployment:
+    runs-on: ubuntu-latest
+    outputs:
+      ui_tag: ${{ steps.set-tags.outputs.ui_tag }}
+      api_tag: ${{ steps.set-tags.outputs.api_tag }}
+      should_deploy: ${{ steps.check-deployment.outputs.should_deploy }}
+
+    steps:
+    - name: Set deployment tags
+      id: set-tags
+      run: |
+        if [[ ! -z "${{ inputs.ui_image_tag }}" ]]; then
+          echo "ui_tag=${{ inputs.ui_image_tag }}" >> $GITHUB_OUTPUT
+        elif [[ "${{ github.event.client_payload.service }}" == "ui" ]]; then
+          echo "ui_tag=${{ github.event.client_payload.image_tag }}" >> $GITHUB_OUTPUT
+        else
+          aws ssm get-parameter --name "/sheva-shop/prod/ui/latest-tag" --query "Parameter.Value" --output text >> $GITHUB_OUTPUT
+        fi
+
+        if [[ ! -z "${{ inputs.api_image_tag }}" ]]; then
+          echo "api_tag=${{ inputs.api_image_tag }}" >> $GITHUB_OUTPUT
+        elif [[ "${{ github.event.client_payload.service }}" == "api" ]]; then
+          echo "api_tag=${{ github.event.client_payload.image_tag }}" >> $GITHUB_OUTPUT
+        else
+          aws ssm get-parameter --name "/sheva-shop/prod/api/latest-tag" --query "Parameter.Value" --output text >> $GITHUB_OUTPUT
+        fi
+
+    - name: Check if deployment should proceed
+      id: check-deployment
+      run: |
+        if [[ ! -z "${{ steps.set-tags.outputs.ui_tag }}" ]] && [[ ! -z "${{ steps.set-tags.outputs.api_tag }}" ]]; then
+          echo "should_deploy=true" >> $GITHUB_OUTPUT
+        else
+          echo "should_deploy=false" >> $GITHUB_OUTPUT
+        fi
+
+  deploy:
+    needs: prepare-deployment
+    if: needs.prepare-deployment.outputs.should_deploy == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ vars.AWS_REGION }}
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: "1.9.6"
+
+    - name: Terraform Init
+      working-directory: ./terraform/app/environment/prod
+      run: terraform init
+
+    - name: Terraform Apply
+      working-directory: ./terraform/app/environment/prod
+      run: terraform apply -auto-approve
+      env:
+        TF_VAR_environment: production
+        TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+        TF_VAR_ecr_images_ui_image_tag: ${{ needs.prepare-deployment.outputs.ui_tag }}
+        TF_VAR_ecr_images_api_image_tag: ${{ needs.prepare-deployment.outputs.api_tag }}
+
+    - name: Update SSM Parameters
+      run: |
+        aws ssm put-parameter --name "/sheva-shop/prod/ui/latest-tag" --value "${{ needs.prepare-deployment.outputs.ui_tag }}" --type String --overwrite
+        aws ssm put-parameter --name "/sheva-shop/prod/api/latest-tag" --value "${{ needs.prepare-deployment.outputs.api_tag }}" --type String --overwrite
