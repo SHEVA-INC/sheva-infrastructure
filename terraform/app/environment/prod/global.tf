@@ -14,17 +14,6 @@ locals {
     superuser_password   = "SUPERUSER_PASSWORD"
     mono_token           = "MONO_TOKEN"
   }
-
-  ecr_images = {
-    api = {
-      repository_name = "sheva-api"
-      image_tag       = "f1242dd7caaa232d85ec930324d11329036fc61f"
-    }
-    ui = {
-      repository_name = "sheva-ui"
-      image_tag       = "52262e023bef2bd9c3bcf54f05ed7f97383ce37b"
-    }
-  }
 }
 
 data "aws_availability_zones" "available" {
@@ -42,7 +31,7 @@ data "aws_ssm_parameter" "params" {
 }
 
 data "aws_ecr_image" "images" {
-  for_each        = local.ecr_images
+  for_each        = var.ecr_images
   repository_name = each.value.repository_name
   image_tag       = each.value.image_tag
 }
