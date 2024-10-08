@@ -21,33 +21,72 @@ jobs:
       should_deploy: ${{ steps.check-deployment.outputs.should_deploy }}
 
     steps:
-    - name: Set deployment tags
-      id: set-tags
-      run: |
-        if [[ ! -z "${{ inputs.ui_image_tag }}" ]]; then
-          echo "ui_tag=${{ inputs.ui_image_tag }}" >> $GITHUB_OUTPUT
-        elif [[ "${{ github.event.client_payload.service }}" == "ui" ]]; then
-          echo "ui_tag=${{ github.event.client_payload.image_tag }}" >> $GITHUB_OUTPUT
-        else
-          aws ssm get-parameter --name "/sheva-shop/prod/ui/latest-tag" --query "Parameter.Value" --output text >> $GITHUB_OUTPUT
-        fi
+      - name: Set deployment tags
+        id: set-tags
+        run: |
+          cat > set_tags.sh << 'EOF'
+          #!/bin/bash
+          set -e
+          set -u
 
-        if [[ ! -z "${{ inputs.api_image_tag }}" ]]; then
-          echo "api_tag=${{ inputs.api_image_tag }}" >> $GITHUB_OUTPUT
-        elif [[ "${{ github.event.client_payload.service }}" == "api" ]]; then
-          echo "api_tag=${{ github.event.client_payload.image_tag }}" >> $GITHUB_OUTPUT
-        else
-          aws ssm get-parameter --name "/sheva-shop/prod/api/latest-tag" --query "Parameter.Value" --output text >> $GITHUB_OUTPUT
-        fi
+          get_ssm_parameter() {
+              local param_name="$1"
+              local param_value
 
-    - name: Check if deployment should proceed
-      id: check-deployment
-      run: |
-        if [[ ! -z "${{ steps.set-tags.outputs.ui_tag }}" ]] && [[ ! -z "${{ steps.set-tags.outputs.api_tag }}" ]]; then
-          echo "should_deploy=true" >> $GITHUB_OUTPUT
-        else
-          echo "should_deploy=false" >> $GITHUB_OUTPUT
-        fi
+              if ! param_value=$(aws ssm get-parameter \
+                  --name "$param_name" \
+                  --query "Parameter.Value" \
+                  --output text 2>/dev/null); then
+                  echo "Error: Failed to get SSM parameter: $param_name" >&2
+                  return 1
+              fi
+              echo "$param_value"
+          }
+
+          if [[ ! -z "$1" ]]; then
+              echo "ui_tag=$1" >> $GITHUB_OUTPUT
+          elif [[ "$3" == "ui" && ! -z "$4" ]]; then
+              echo "ui_tag=$4" >> $GITHUB_OUTPUT
+          else
+              UI_TAG=$(get_ssm_parameter "/sheva-shop/prod/ui/latest-tag")
+              echo "ui_tag=$UI_TAG" >> $GITHUB_OUTPUT
+          fi
+
+          # API tag logic
+          if [[ ! -z "$2" ]]; then
+              echo "api_tag=$2" >> $GITHUB_OUTPUT
+          elif [[ "$3" == "api" && ! -z "$4" ]]; then
+              echo "api_tag=$4" >> $GITHUB_OUTPUT
+          else
+              API_TAG=$(get_ssm_parameter "/sheva-shop/prod/api/latest-tag")
+              echo "api_tag=$API_TAG" >> $GITHUB_OUTPUT
+          fi
+          EOF
+
+          chmod +x set_tags.sh
+          ./set_tags.sh \
+            "${{ inputs.ui_image_tag }}" \
+            "${{ inputs.api_image_tag }}" \
+            "${{ github.event.client_payload.service }}" \
+            "${{ github.event.client_payload.image_tag }}"
+
+      - name: Check if deployment should proceed
+        id: check-deployment
+        run: |
+          UI_TAG="${{ steps.set-tags.outputs.ui_tag }}"
+          API_TAG="${{ steps.set-tags.outputs.api_tag }}"
+          
+          if [[ ! -z "$UI_TAG" ]] && [[ ! -z "$API_TAG" ]]; then
+            echo "should_deploy=true" >> $GITHUB_OUTPUT
+            echo "UI Tag: $UI_TAG"
+            echo "API Tag: $API_TAG"
+          else
+            echo "should_deploy=false" >> $GITHUB_OUTPUT
+            echo "Error: Missing required tags"
+            [[ -z "$UI_TAG" ]] && echo "Missing UI tag"
+            [[ -z "$API_TAG" ]] && echo "Missing API tag"
+            exit 1
+          fi
 
   deploy:
     needs: prepare-deployment
